@@ -13,12 +13,15 @@ import java.awt.*;
 import java.awt.event.*;
 import java.sql.*;
 import java.util.Vector;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 
 public class TPSAppGUI2 extends JFrame {
 
-    // DB connection settings
-    static final String DB_URL = "jdbc:sqlite:tps_db.sqlite";
-    static final String DB_USER = "root";
+    // DB connection settings for MS Access using UCanAccess
+    static final String DB_URL = "jdbc:ucanaccess://C:\\Users\\jonathan\\Documents\\DatabaseLim.accdb";
+    // UCanAccess doesn't require username/password for local Access files
+    static final String DB_USER = "";
     static final String DB_PASSWORD = "";
 
     CardLayout cardLayout;
@@ -64,7 +67,7 @@ public class TPSAppGUI2 extends JFrame {
             String user = usernameField.getText();
             String pass = new String(passwordField.getPassword());
 
-if (authenticate(user, pass)) {
+            if (authenticate(user, pass)) {
                 loggedInUser = user; // Store the logged-in username
                 showDashboard(); // Switch to the dashboard
             } else {
@@ -139,7 +142,7 @@ if (authenticate(user, pass)) {
         inputPanel.add(addBtn);
         inputPanel.add(refreshBtn);
         
-panel.add(inputPanel, BorderLayout.NORTH); // Input panel at the top
+        panel.add(inputPanel, BorderLayout.NORTH); // Input panel at the top
         panel.add(new JScrollPane(table), BorderLayout.CENTER); // Table in the center with scroll
         panel.add(logoutBtn, BorderLayout.SOUTH); // Logout button at the bottom
 
@@ -184,7 +187,7 @@ panel.add(inputPanel, BorderLayout.NORTH); // Input panel at the top
         return panel;
     }
     
-// Authenticates user against the database
+    // Authenticates user against the database
     private boolean authenticate(String username, String password) {
         try (Connection conn = DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD)) {
             // Use PreparedStatement to prevent SQL injection
@@ -226,30 +229,29 @@ panel.add(inputPanel, BorderLayout.NORTH); // Input panel at the top
         }
     }
     
-// Adds a new transaction to the database
+    // Adds a new transaction to the database
     private void addTransaction(String user, String desc, double amount) {
         try (Connection conn = DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD)) {
+            // Access doesn't support NOW(), so we'll use a parameter for timestamp
             PreparedStatement stmt = conn.prepareStatement(
-                "INSERT INTO transactions (username, description, amount, timestamp) VALUES (?, ?, ?, NOW())" // NOW() adds current timestamp
+                "INSERT INTO transactions (username, description, amount, timestamp) VALUES (?, ?, ?, ?)"
             );
             stmt.setString(1, user);
             stmt.setString(2, desc);
             stmt.setDouble(3, amount);
+            stmt.setTimestamp(4, new Timestamp(System.currentTimeMillis())); // Current timestamp
             stmt.executeUpdate();
             JOptionPane.showMessageDialog(this, "Transaction added successfully!");
         } catch (SQLException e) {
             JOptionPane.showMessageDialog(this, "Error adding transaction: " + e.getMessage(), "DB Error", JOptionPane.ERROR_MESSAGE);
         }
     }
+
     // Loads transactions for the logged-in user into the JTable
-
-    
-
-// Loads transactions for the logged-in user into the JTable
     private void loadTransactions(JTable table) {
         try (Connection conn = DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD)) {
             PreparedStatement stmt = conn.prepareStatement(
-                "SELECT id, description, amount, timestamp FROM transactions WHERE username = ? ORDER BY timestamp DESC" // Added id and order
+                "SELECT id, description, amount, timestamp FROM transactions WHERE username = ? ORDER BY timestamp DESC"
             );
             stmt.setString(1, loggedInUser);
             ResultSet rs = stmt.executeQuery();
@@ -301,54 +303,62 @@ panel.add(inputPanel, BorderLayout.NORTH); // Input panel at the top
             @Override
             public void run() {
                 // Before starting the GUI, let's ensure the database and tables exist.
-                // This is a simplified approach for demonstration. In a real app,
-                // you'd have a more robust DB setup script.
                 try {
-                    Class.forName("org.sqlite.JDBC"); // Load the MySQL JDBC driver
+                    // Load UCanAccess driver
+                    Class.forName("net.ucanaccess.jdbc.UcanaccessDriver");
                     createDatabaseAndTables();
                 } catch (ClassNotFoundException e) {
-                    JOptionPane.showMessageDialog(null, "MySQL JDBC Driver not found. Please add it to your classpath.", "Driver Error", JOptionPane.ERROR_MESSAGE);
+                    JOptionPane.showMessageDialog(null, "UCanAccess JDBC Driver not found. Please add UCanAccess JAR files to your classpath.", "Driver Error", JOptionPane.ERROR_MESSAGE);
                     System.exit(1);
                 } catch (SQLException e) {
                     JOptionPane.showMessageDialog(null, "Error setting up database: " + e.getMessage(), "DB Setup Error", JOptionPane.ERROR_MESSAGE);
                     System.exit(1);
                 }
-                TPSAppGUI2 tpsAppGUI2 = new TPSAppGUI2();
+                new TPSAppGUI2();
             }
         });
     }
     
-// Helper method to create the database and tables if they don't exist
+    // Helper method to create the database and tables if they don't exist
     private static void createDatabaseAndTables() throws SQLException {
-        // Connect without specifying a database to create it if it doesn't exist
-        try (Connection conn = DriverManager.getConnection("jdbc:mysql://localhost:3306/", DB_USER, DB_PASSWORD)) {
-            Statement stmt = conn.createStatement();
-            stmt.executeUpdate("CREATE DATABASE IF NOT EXISTS tps_db");
-        }
-
-        // Now connect to the specific database
+        // For Access, we connect directly to the database file
+        // UCanAccess will create the file if it doesn't exist
         try (Connection conn = DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD)) {
             Statement stmt = conn.createStatement();
 
-            // Create users table
-            stmt.executeUpdate(
-                "CREATE TABLE IF NOT EXISTS users (" +
-                "username VARCHAR(50) PRIMARY KEY," +
-                "password VARCHAR(50) NOT NULL" + // In production, store hashed passwords
-                ")"
-            );
+            // Create users table - Access uses AUTOINCREMENT instead of AUTO_INCREMENT
+            // and TEXT instead of VARCHAR for better compatibility
+            try {
+                stmt.executeUpdate(
+                    "CREATE TABLE users (" +
+                    "username TEXT(50) PRIMARY KEY," +
+                    "password TEXT(50) NOT NULL" +
+                    ")"
+                );
+            } catch (SQLException e) {
+                // Table might already exist, ignore the error
+                if (!e.getMessage().contains("already exists")) {
+                    throw e;
+                }
+            }
 
-            // Create transactions table
-            stmt.executeUpdate(
-                "CREATE TABLE IF NOT EXISTS transactions (" +
-                "id INT AUTO_INCREMENT PRIMARY KEY," +
-                "username VARCHAR(50) NOT NULL," +
-                "description VARCHAR(255) NOT NULL," +
-                "amount DOUBLE NOT NULL," +
-                "timestamp DATETIME DEFAULT CURRENT_TIMESTAMP," + // Automatically records transaction time
-                "FOREIGN KEY (username) REFERENCES users(username)" + // Link to users table
-                ")"
-            );
+            // Create transactions table - Access uses AUTOINCREMENT and DATETIME
+            try {
+                stmt.executeUpdate(
+                    "CREATE TABLE transactions (" +
+                    "id AUTOINCREMENT PRIMARY KEY," +
+                    "username TEXT(50) NOT NULL," +
+                    "description TEXT(255) NOT NULL," +
+                    "amount DOUBLE NOT NULL," +
+                    "timestamp DATETIME" +
+                    ")"
+                );
+            } catch (SQLException e) {
+                // Table might already exist, ignore the error
+                if (!e.getMessage().contains("already exists")) {
+                    throw e;
+                }
+            }   
         }
     }
 }
